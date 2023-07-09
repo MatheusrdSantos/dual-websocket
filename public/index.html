@@ -296,7 +296,7 @@
       rooms.push(room)
       document.getElementById('rooms').innerHTML += `<div class="room">
         <div class="room-name"><b>${room.name}</b></div>
-        <div class="room-users">${room.participants.length}/4</div>
+        <div class="room-users">${room.participants.length}/6</div>
         <button onclick="joinRoom('${room.owner}')" ${room.participants > 3 ? 'disabled' : ''}>join</button>
       </div>`
     }

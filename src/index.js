@@ -148,7 +148,7 @@ const initGameState = (room) => {
     matches: []
   }
 }
-const minPlayers = 2
+const minPlayers = 4
 // TODO: refactor this function to check the number of players on each team
 const isGameReadyToStart = (state) => {
   let nPLayers = 0
