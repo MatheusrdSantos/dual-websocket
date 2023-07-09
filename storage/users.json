@@ -1,0 +1,22 @@
+[
+  {
+    "username": "user",
+    "password": "pwd",
+    "id": "6725f9c8-6c6b-4f3c-b968-ab981a652809"
+  },
+  {
+    "username": "user2",
+    "password": "pwd",
+    "id": "6b807b5f-7a1b-41bc-a9db-5be041c914fe"
+  },
+  {
+    "username": "user3",
+    "password": "pwd",
+    "id": "9685f143-9a69-48e7-91de-d2dea1b263d2"
+  },
+  {
+    "username": "user4",
+    "password": "pwd",
+    "id": "78312648-09f3-47bc-9964-13d8fa5805f3"
+  }
+]

@@ -1,0 +1,446 @@
+<html>
+
+<head>
+  <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+  <div id="login-container">
+    <h2>Login</h2>
+    <div class="input-field">
+      <input type="text" name="username" id="login-username" placeholder="Enter Username">
+    </div>
+    <div class="input-field">
+      <input type="password" name="password" id="login-password" placeholder="Enter Password">
+    </div>
+    <button type="submit" onclick="login()">login</button>
+    </br>
+    <a href="#" type="submit" onclick="setActiveContainer('registerContainer')">create a new account</a>
+  </div>
+  <div id="register-container">
+    <h2>Register</h2>
+    <div class="input-field">
+      <input type="text" name="username" id="register-username" placeholder="Enter Username">
+    </div>
+    <div class="input-field">
+      <input type="password" name="password" id="register-password" placeholder="Enter Password">
+    </div>
+    <button type="submit" onclick="register()">create</button>
+    </br>
+    <a href="#" type="submit" onclick="setActiveContainer('loginContainer')">go to login</a>
+  </div>
+  <div id="main-container">
+    <div class="main-screen">
+      <div class="chat-container">
+        <div id="messages" class="messages-container"></div>
+        <div class="chat-controller-container">
+          <div id="chat-input" contenteditable="true"></div>
+          <button id="send-message-btn" onclick="sendMessage()">send</button>
+        </div>
+      </div>
+      <div class="rooms-container">
+        <h3>Rooms</h3>
+        <button class="create-room-btn" onclick="createRoom()">new room</button>
+        <div id="rooms" class="rooms-list"></div>
+      </div>
+    </div>
+  </div>
+  <div id="game-container">
+    <canvas id="game"></canvas>
+    <button id="back-mainscreen" disabled="true" onclick="goBackToMainScreen()">go back</button>
+  </div>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+  <script src="./utils.js"></script>
+  <script>
+    let userId = localStorage.getItem('userId')
+    let username = localStorage.getItem('username')
+    let activeContainer = userId ? 'mainContainer' : 'loginContainer'
+    let socket
+    let x = 0
+    let y = 0
+    let gameStarted = false
+    let currentRoom
+    let gameState
+    let charSize
+    let charBaseStatus
+    let bulletSize
+    const characterList = ['square', 'circle', 'triangle']
+    const canvas = document.getElementById('game')
+    canvas.width = 700
+    canvas.height = 700
+    const ctx = canvas.getContext('2d')
+
+    const drawRect = (x, y, size = charSize) => {
+      ctx.fillStyle = 'red'
+      ctx.fillRect(x - size, y - size, size * 2, size * 2)
+    }
+
+    const drawInfo = (player, team) => {
+      ctx.fillStyle = '#f54f4c'
+      const barSize = charSize * 2
+      const barHpY = team === 1 ? player.y - charSize - 10 : player.y + charSize + 10  
+      const barBulletsY = team === 1 ? barHpY - 10 : barHpY + 10  
+      ctx.fillRect(player.x - charSize, barHpY, barSize * (player.hp / player.maxHp), 5)
+      ctx.fillStyle = player.nBullets === player.maxBullets || player.specialActive ? 'yellow' : 'blue'
+      ctx.fillRect(player.x - charSize, barBulletsY, barSize * (player.nBullets / player.maxBullets), 5)
+    }
+
+    const drawCircle = (x, y, size = charSize) => {
+      ctx.beginPath()
+      ctx.fillStyle = 'green'
+      ctx.ellipse(x, y, size, size, 0, 0, 2 * Math.PI)
+      ctx.stroke()
+      ctx.fill()
+    }
+
+    const drawTriangle = (x, y, teamNumber = 1, size = charSize) => {
+      ctx.beginPath()
+      ctx.fillStyle = 'blue'
+      if (teamNumber === 1) {
+        ctx.moveTo(x - size, y - size)
+        ctx.lineTo(x, y + size)
+        ctx.lineTo(x + size, y - size)
+      } else {
+        ctx.moveTo(x - size, y + size)
+        ctx.lineTo(x, y - size)
+        ctx.lineTo(x + size, y + size)
+      }
+      ctx.fill()
+    }
+
+    const getUserCharacter = (userId) => {
+      if (!gameState) return
+      const chatTeam1 = characterList.find(char => {
+        return gameState.team1[char].userId === userId
+      })
+
+      const chatTeam2 = characterList.find(char => {
+        return gameState.team2[char].userId === userId
+      })
+      if (chatTeam1) return { team: 1, char: chatTeam1 }
+      if (chatTeam2) return { team: 2, char: chatTeam2 }
+    }
+
+    const checkUserInCurrentMatch = () => {
+      const userInfo = getUserCharacter(userId)
+      if (!(userInfo && gameState && gameState.matches[gameState.currentMatch])) return false
+      const { team: teamNumber, char } = userInfo
+      return gameState.matches[gameState.currentMatch][teamNumber - 1] === char
+    }
+
+    
+    
+    const charContainerWidth = canvas.width / 3
+    const charContainerHeight = canvas.height / 2 - 30
+    const sideDivider1Y = canvas.height / 2 - 30
+    const sideDivider2Y = canvas.height / 2 + 30
+    
+    const drawSelectedCharacters = () => {
+      if (!currentRoom) return
+      currentRoom.participants.forEach(participantId => {
+        const userCharInfo = getUserCharacter(participantId)
+        if (userCharInfo) {
+          const { char, team } = userCharInfo
+          ctx.fillStyle = '#ffffff88'
+          const x = char === 'square' ? 0 : (char === 'circle' ? charContainerWidth : charContainerWidth * 2) 
+          const y = team === 1 ? 0 : sideDivider2Y
+          ctx.fillRect(
+            x,
+            y,
+            charContainerWidth,
+            charContainerHeight
+          )
+          ctx.fillStyle = 'black'
+          ctx.font = "20px Arial"
+          ctx.textAlign = "center"
+          ctx.fillText('selected', x + (charContainerWidth / 2), y + (charContainerHeight / 2))
+        }
+      })
+    }
+
+    const drawCharacter = (shape, teamNumber) => {
+      const char = gameState['team' + teamNumber][shape]
+      if (shape === 'circle') {
+        drawCircle(char.x, char.y)
+        char.bullets.forEach((bullet) => {
+          drawCircle(bullet.x, bullet.y, 7)
+        })
+      } else if (shape === 'square') {
+        drawRect(char.x, char.y)
+        char.bullets.forEach((bullet) => {
+          drawRect(bullet.x, bullet.y, bullet.special ? bullet.size : 7)
+        })
+      } else {
+        drawTriangle(char.x, char.y, teamNumber)
+        char.bullets.forEach((bullet) => {
+          drawTriangle(bullet.x, bullet.y, teamNumber, 7)
+        })
+      }
+    }
+
+    // draw game
+    async function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      if (!gameState) {
+        requestAnimationFrame(draw)
+        return
+      }
+      if (!gameStarted) {
+        // draw initial instructions
+        ctx.fillStyle = 'white'
+        ctx.fillRect(0, sideDivider1Y, canvas.width, 2)
+        ctx.fillRect(0, canvas.height / 2 + 30, canvas.width, 2)
+        ctx.font = "30px Arial"
+        ctx.textAlign = "center"
+        ctx.fillText('choose you character', canvas.width / 2, canvas.height / 2)
+        // draw divider
+        ctx.fillRect(charContainerWidth, 0, 2, charContainerHeight)
+        ctx.fillRect((charContainerWidth) * 2, 0, 2, charContainerHeight)
+        
+        ctx.fillRect(charContainerWidth, canvas.height / 2 + 30, 2, charContainerHeight)
+        ctx.fillRect((charContainerWidth) * 2, canvas.height / 2 + 30, 2, charContainerHeight)
+        
+        // draw characters
+        drawRect(charContainerWidth / 2, (canvas.height / 2 - 30) / 2)
+        drawCircle(charContainerWidth * 1.5, charContainerHeight / 2)
+        drawTriangle(charContainerWidth * 2.5, charContainerHeight / 2)
+        
+        drawRect(charContainerWidth / 2, (canvas.height / 2 - 30) / 2 + sideDivider2Y)
+        drawCircle(charContainerWidth * 1.5, charContainerHeight / 2 + sideDivider2Y)
+        drawTriangle(charContainerWidth * 2.5, charContainerHeight / 2 + sideDivider2Y, 2)
+        
+        drawSelectedCharacters()
+        
+      } else {
+        ctx.fillStyle = 'white'
+        ctx.font = "30px Arial"
+        ctx.textAlign = "center"
+        ctx.fillText(gameState.team1.score + '', 20, 30)
+        ctx.fillText(gameState.team2.score + '', 20, canvas.height - 30)
+        
+        const [shape1, shape2] = gameState.matches[gameState.currentMatch]
+        const char1 = gameState.team1[shape1]
+        const char2 = gameState.team2[shape2]
+        drawCharacter(shape1, 1)
+        drawCharacter(shape2, 2)
+        drawInfo(char1, 1)
+        drawInfo(char2, 2)
+        ctx.fillStyle = 'white'
+        ctx.fillRect(0, canvas.height / 2, canvas.width, 2)
+
+      }
+      requestAnimationFrame(draw)
+    }
+
+    requestAnimationFrame(draw)
+
+    // user controls
+    canvas.addEventListener('mousemove', (event) => {
+      const isUserInCurrentMatch = checkUserInCurrentMatch()
+      if (!(gameStarted && gameState && isUserInCurrentMatch)) return
+      y = event.clientY - canvas.getBoundingClientRect().top
+      x = event.clientX - canvas.getBoundingClientRect().left
+      const userInfo = getUserCharacter(userId)
+      if (!userInfo) return
+      const { team, char } = userInfo
+      if (team === 1 && y > canvas.height / 2) return
+      if (team === 2 && y < canvas.height / 2) return
+      gameState['team' + team][char].x = x
+      gameState['team' + team][char].y = y
+      socket.emit('move', { x, y })
+    })
+
+    canvas.addEventListener('click', (event) => {
+      const userCharInfo = getUserCharacter(userId)
+      const isUserInCurrentMatch = checkUserInCurrentMatch()
+      if (!(gameStarted || userCharInfo)) {
+        const selectedChar = parseInt(event.offsetX / charContainerWidth)
+        const selectedTeam = event.offsetY < sideDivider1Y ? 0 : (event.offsetY > sideDivider2Y ? 1 : -1)
+        if (selectedTeam !== -1) {
+          const teamName = selectedTeam === 0 ? 'team1' : 'team2'
+          const character = characterList[selectedChar] 
+          gameState[teamName][character].userId = userId
+          socket.emit('teamSelected', { team: selectedTeam, char: selectedChar, roomId: currentRoom.owner })
+        }
+      // the game started and the current user is playing
+      } else if (gameStarted && userCharInfo && isUserInCurrentMatch) {
+        socket.emit('shot', userCharInfo)
+      }
+    })
+
+    const messages = []
+    let rooms = []
+    const interfaces = {
+      loginContainer: document.getElementById('login-container'),
+      registerContainer: document.getElementById('register-container'),
+      mainContainer: document.getElementById('main-container'),
+      gameContainer: document.getElementById('game-container')
+    }
+    const setActiveContainer = (newActive) => {
+      Object.keys(interfaces).forEach(container => {
+        interfaces[container].style.display = container === newActive ? 'block' : 'none'
+      })
+      activeContainer = newActive
+    }
+
+    const pushMessage = (message) => {
+      messages.push(message)
+      document.getElementById('messages').innerHTML = `<div class="message ${message.from === userId ? ' my-message' : 'others-message'}">
+        <div class="message-user"><b>${message.username}: </b></div>
+        <div class="message-content">${message.content}</div>
+      </div>` + document.getElementById('messages').innerHTML
+    }
+
+    const pushRoom = (room) => {
+      rooms.push(room)
+      document.getElementById('rooms').innerHTML += `<div class="room">
+        <div class="room-name"><b>${room.name}</b></div>
+        <div class="room-users">${room.participants.length}/4</div>
+        <button onclick="joinRoom('${room.owner}')" ${room.participants > 3 ? 'disabled' : ''}>join</button>
+      </div>`
+    }
+
+    const refreshRoomsLayout = () => {
+      document.getElementById('rooms').innerHTML = rooms.map((room) => `<div class="room">
+        <div class="room-name"><b>${room.name}</b></div>
+        <div class="room-users">${room.participants.length}/6</div>
+        <button onclick="joinRoom('${room.owner}')">join</button>
+      </div>`).join('')
+    }
+
+    const goBackToMainScreen = () => {
+      gameStarted = false
+      currentRoom = undefined
+      gameState = undefined
+      setActiveContainer('mainContainer')
+      refreshRoomsLayout()
+    }
+
+    const joinRoom = (roomId) => {
+      const room = rooms.find(room => room.owner === roomId)
+      if (!room) return
+      room.participants.push(userId)
+      socket.emit('joinRoom', roomId)
+      currentRoom = room
+      refreshRoomsLayout()
+      setActiveContainer('gameContainer')
+    }
+
+    const connect = () => {
+      if (!userId) return
+      socket = io('localhost:3000', { auth: { userId } })
+
+      socket.on('initialData', (data) => {
+        data.rooms.forEach(pushRoom)
+        charSize = data.charSize
+        charBaseStatus = data.charBaseStatus
+        bulletSize = data.bulletSize
+      })
+
+      socket.on('message', pushMessage)
+
+      socket.on('newRoom', (room) => {
+        pushRoom(room)
+      })
+
+      socket.on('userJoined', (data) => {
+        const room = rooms.find(room => room.owner === data.roomId)
+        room.participants.push(data.userId)
+        refreshRoomsLayout()
+      })
+
+      socket.on('teamSelected', ({ team, char, userId }) => {
+        const charName = characterList[char]
+        gameState[team === 0 ? 'team1' : 'team2'][charName].userId = userId
+      })
+
+      socket.on('loadGameState', (serverGameState) => {
+        gameState = serverGameState
+      })
+
+      socket.on('updateGameState', (serverGameState) => {
+        gameState = serverGameState
+      })
+
+      socket.on('gameStarted', () => {
+        gameStarted = true
+      })
+      
+      socket.on('gameEnd', () => {
+        document.getElementById('back-mainscreen').removeAttribute('disabled')
+        console.log('gameEnd')
+      })
+
+      socket.on('updateRooms', (currentRooms) => {
+        rooms = currentRooms
+      })
+
+      socket.on('')
+
+      // socket.onAny((event, ...args) => {
+      //   console.log(event, args)
+      // })
+    }
+
+    const sendMessage = () => {
+      if (!userId) return
+      const newMessage = {
+        from: userId,
+        username,
+        content: document.getElementById('chat-input').innerHTML
+      }
+      pushMessage(newMessage)
+      socket.emit('message', newMessage)
+      document.getElementById('chat-input').innerHTML = ''
+    }
+
+    const createRoom = () => {
+      if (!userId) return
+      const name = prompt('Room name:')
+      if (!name) return
+      const room = {
+        owner: userId,
+        name,
+        participants: [
+          userId,
+        ]
+      }
+      pushRoom(room)
+      currentRoom = room
+      // gameState = createGameState()
+      socket.emit('newRoom', { owner: userId, name })
+      setActiveContainer('gameContainer')
+    }
+
+    setActiveContainer(activeContainer)
+    connect()
+    const login = () => {
+      const usernameInput = document.getElementById('login-username').value
+      const password = document.getElementById('login-password').value
+      axios.post('http://localhost:3000/login', { username: usernameInput, password }).then((res) => {
+        localStorage.setItem('userId', res.data.id)
+        localStorage.setItem('username', usernameInput)
+        userId = res.data.id
+        username = usernameInput
+        setActiveContainer('mainContainer')
+        connect()
+      })
+    }
+
+    const register = () => {
+      const usernameInput = document.getElementById('register-username').value
+      const password = document.getElementById('register-password').value
+      axios.post('http://localhost:3000/user', { username: usernameInput, password }).then((res) => {
+        localStorage.setItem('userId', res.data.id)
+        localStorage.setItem('username', usernameInput)
+        userId = res.data.id
+        username = usernameInput
+        setActiveContainer('mainContainer')
+        connect()
+      })
+    }
+  </script>
+</body>
+
+</html>
